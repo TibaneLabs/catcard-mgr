@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   ColdcardClient,
@@ -9,6 +10,8 @@ import {
   ReplyDecoder,
 } from '../src/protocol/coldcard';
 import { FakeTransport } from './fake';
+import { sha256 } from '../src/firmware/catalog';
+import { MAX_BLK_LEN, type InstallProgress } from '../src/protocol/coldcard';
 
 const enc = new TextEncoder();
 
@@ -94,5 +97,65 @@ describe('ColdcardClient', () => {
     const payload = 'meow'.repeat(30);
     const r = await new ColdcardClient(t).ping(payload);
     expect(new TextDecoder().decode(r.echo)).toBe(payload);
+  });
+});
+
+describe('firmware install', () => {
+  /** A Coldcard that stores uploads, hashes them, and records a restart. */
+  function uploader(opts: { corrupt?: boolean } = {}) {
+    const stored: number[] = [];
+    let rebooted = false;
+    const cmds: string[] = [];
+    const t = new FakeTransport((report, all) => {
+      if (!(report[0]! & FLAG_LAST)) return [];
+      const d = new ReplyDecoder();
+      let msg: Uint8Array | null = null;
+      for (const r of all) msg = d.feed(r) ?? msg;
+      all.length = 0;
+      const m = msg!;
+      const name = new TextDecoder().decode(m.subarray(0, 4));
+      cmds.push(name);
+      const v = new DataView(m.buffer, m.byteOffset, m.byteLength);
+      if (name === 'upld') {
+        const off = v.getUint32(4, true);
+        const data = m.subarray(12);
+        for (let i = 0; i < data.length; i++) stored[off + i] = data[i]!;
+        if (opts.corrupt && off === 0) stored[5] = (stored[5]! + 1) & 0xff;
+        const r = new Uint8Array(8);
+        r.set(enc.encode('int1'));
+        new DataView(r.buffer).setUint32(4, off, true);
+        return encodePackets(r);
+      }
+      if (name === 'sha2') {
+        const digest = createHash('sha256').update(Uint8Array.from(stored)).digest();
+        return encodePackets(Uint8Array.from([...enc.encode('biny'), ...digest]));
+      }
+      if (name === 'rebo') {
+        rebooted = true;
+        return [];
+      }
+      return encodePackets(enc.encode('err_?'));
+    });
+    return { t, stored, cmds, rebooted: () => rebooted };
+  }
+
+  const image = Uint8Array.from({ length: MAX_BLK_LEN * 3 + 512 }, (_, i) => (i * 13) & 0xff);
+  const header = Uint8Array.from({ length: 128 }, (_, i) => 255 - i);
+
+  it('sends the image in blocks, then the header as a trailer, then restarts', async () => {
+    const dev = uploader();
+    const seen: InstallProgress['stage'][] = [];
+    await new ColdcardClient(dev.t).installFirmware(image, header, sha256, (p) => seen.push(p.stage));
+    expect(dev.stored).toEqual([...image, ...header]);
+    expect(dev.cmds).toEqual(['upld', 'upld', 'upld', 'upld', 'sha2', 'upld', 'sha2', 'rebo']);
+    expect(dev.rebooted()).toBe(true);
+    expect(seen.at(-1)).toBe('reboot');
+  });
+
+  it('stops before the trailer when the device holds different bytes', async () => {
+    const dev = uploader({ corrupt: true });
+    await expect(new ColdcardClient(dev.t).installFirmware(image, header, sha256)).rejects.toThrow(/different bytes/);
+    expect(dev.cmds).not.toContain('rebo');
+    expect(dev.stored).toHaveLength(image.length);
   });
 });

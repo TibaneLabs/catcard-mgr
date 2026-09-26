@@ -35,6 +35,10 @@ interface State {
   pings: PingResult[];
   log: DeviceLog | null;
   busy: boolean;
+  /** Set while a firmware install runs, and after it asks the device to restart. */
+  installing: boolean;
+  /** Set when the device left because it restarted to install firmware. */
+  restarted: boolean;
 }
 
 const state = reactive<State>({
@@ -50,6 +54,8 @@ const state = reactive<State>({
   pings: [],
   log: null,
   busy: false,
+  installing: false,
+  restarted: false,
 });
 
 let device: HIDDevice | null = null;
@@ -79,6 +85,7 @@ function reset(): void {
   state.pings = [];
   state.log = null;
   state.busy = false;
+  state.installing = false;
 }
 
 /** True when the browser exposes a report the page can send to on this device. */
@@ -106,7 +113,14 @@ async function attach(dev: HIDDevice): Promise<void> {
     }
     device = dev;
     transport = new WebHidTransport(dev);
-    client = known.kind === 'catcard' ? new CatCardClient(transport) : new ColdcardClient(transport);
+    if (known.kind === 'catcard') {
+      client = new CatCardClient(transport);
+    } else {
+      const cc = new ColdcardClient(transport);
+      await cc.resync();
+      client = cc;
+    }
+    state.restarted = false;
     await identify();
     state.phase = 'ready';
   } catch (err) {
@@ -209,12 +223,36 @@ export async function readLog(): Promise<void> {
   }
 }
 
+/** The connected Coldcard's client, for the firmware switch. */
+export function coldcardClient(): ColdcardClient | null {
+  return client instanceof ColdcardClient ? client : null;
+}
+
+/**
+ * Runs a firmware install. The device is expected to leave the bus when it finishes,
+ * so that departure is reported as a restart, not as an unplug.
+ */
+export async function runInstall(job: (c: ColdcardClient) => Promise<void>): Promise<void> {
+  const c = coldcardClient();
+  if (!c) throw new Error('No Coldcard is connected.');
+  state.installing = true;
+  state.busy = true;
+  try {
+    await job(c);
+    state.restarted = true;
+  } finally {
+    state.busy = false;
+  }
+}
+
 if (state.supported) {
   navigator.hid.addEventListener('disconnect', (ev) => {
     if (ev.device === device) {
+      const restarting = state.installing;
       reset();
       state.phase = 'idle';
-      state.error = 'The device was unplugged.';
+      state.restarted = restarting;
+      state.error = restarting ? null : 'The device was unplugged.';
     }
   });
   // A device this site already has permission for can be opened without a prompt.

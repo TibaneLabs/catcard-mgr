@@ -8,7 +8,7 @@
  * A message is a four-character ASCII command followed by its arguments; a reply is a
  * four-character tag followed by its data. Only the unencrypted subset is implemented.
  */
-import { Serial, type Transport } from './transport';
+import { Serial, TransportTimeout, type Transport } from './transport';
 
 export const COLDCARD_VID = 0xd13e;
 export const COLDCARD_PID = 0xcc10;
@@ -18,8 +18,10 @@ export const PACKET_PAYLOAD = 63;
 export const FLAG_LAST = 0x80;
 export const FLAG_ENCRYPTED = 0x40;
 export const LEN_MASK = 0x3f;
-/** Largest message the device accepts: 4-byte command + two u32 + a 2048-byte block. */
-export const MAX_MSG_LEN = 4 + 4 + 4 + 2048;
+/** Largest block one upload message carries. */
+export const MAX_BLK_LEN = 2048;
+/** Largest message the device accepts: 4-byte command + two u32 + a block. */
+export const MAX_MSG_LEN = 4 + 4 + 4 + MAX_BLK_LEN;
 
 const enc = new TextEncoder();
 const ascii = new TextDecoder('ascii');
@@ -189,6 +191,25 @@ function cmd(name: string, ...parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
+function u32s(...values: number[]): Uint8Array {
+  const b = new Uint8Array(values.length * 4);
+  const v = new DataView(b.buffer);
+  values.forEach((x, i) => v.setUint32(i * 4, x, true));
+  return b;
+}
+
+/** `upld`: one block of a file, at `offset` of `total`. */
+export function uploadMessage(offset: number, total: number, data: Uint8Array): Uint8Array {
+  if (data.length > MAX_BLK_LEN) throw new RangeError(`block of ${data.length} bytes exceeds ${MAX_BLK_LEN}`);
+  return cmd('upld', u32s(offset, total), data);
+}
+
+export interface InstallProgress {
+  stage: 'upload' | 'verify' | 'trailer' | 'reboot';
+  sent: number;
+  total: number;
+}
+
 export class ColdcardClient {
   private readonly serial = new Serial();
 
@@ -196,6 +217,25 @@ export class ColdcardClient {
     readonly transport: Transport,
     readonly timeoutMs = 3000,
   ) {}
+
+  /**
+   * Resets the device's packet reassembly: an empty packet flagged last. A page reloaded
+   * mid-message would otherwise leave the device waiting for the rest of it.
+   */
+  resync(): Promise<void> {
+    return this.serial.run(async () => {
+      const p = new Uint8Array(REPORT_LEN).fill(0xff);
+      p[0] = FLAG_LAST;
+      await this.transport.write(p);
+      // Whatever it says to a zero-length message is not an answer to anything.
+      try {
+        await this.transport.read(150);
+      } catch {
+        // Silence is fine.
+      }
+      this.transport.drain();
+    });
+  }
 
   /** Sends one raw message and returns the decoded reply. */
   send(msg: Uint8Array, timeoutMs = this.timeoutMs): Promise<Decoded> {
@@ -232,5 +272,67 @@ export class ColdcardClient {
   async blockChain(): Promise<string> {
     const r = await this.expect(cmd('blkc'), 'asci');
     return r.text.trim();
+  }
+
+  /** Sends one block; the device answers with the offset it stored it at. */
+  async uploadBlock(offset: number, total: number, data: Uint8Array, timeoutMs = 10_000): Promise<void> {
+    const r = await this.expect(uploadMessage(offset, total, data), 'int1', timeoutMs);
+    if (r.values[0] !== offset) {
+      throw new ColdcardError('int1', `the device stored the block at ${r.values[0]}, not ${offset}`);
+    }
+  }
+
+  /** SHA-256 of everything uploaded so far, as the device computed it. */
+  async uploadedSha256(timeoutMs = 10_000): Promise<Uint8Array> {
+    const r = await this.expect(cmd('sha2'), 'biny', timeoutMs);
+    if (r.data.length !== 32) throw new ColdcardError('biny', `digest of ${r.data.length} bytes`);
+    return r.data;
+  }
+
+  /**
+   * Asks the device to restart. It may go before it answers, so a timeout is taken as
+   * the request having worked.
+   */
+  async reboot(): Promise<void> {
+    try {
+      await this.send(cmd('rebo'), 1500);
+    } catch (err) {
+      if (!(err instanceof TransportTimeout) && !(err instanceof Error && err.name === 'TransportClosed')) throw err;
+    }
+  }
+
+  /**
+   * Installs a firmware image through stock firmware's uploader: the image in blocks,
+   * the device's digest of it checked, then the 128-byte header again as a trailer (which
+   * tells the bootloader the whole image arrived), checked again, then a restart into
+   * the bootloader to install it.
+   */
+  async installFirmware(
+    image: Uint8Array,
+    header: Uint8Array,
+    digest: (b: Uint8Array) => Promise<Uint8Array>,
+    onProgress?: (p: InstallProgress) => void,
+  ): Promise<void> {
+    const total = image.length;
+    for (let at = 0; at < total; at += MAX_BLK_LEN) {
+      const block = image.subarray(at, Math.min(at + MAX_BLK_LEN, total));
+      await this.uploadBlock(at, total, block);
+      onProgress?.({ stage: 'upload', sent: at + block.length, total });
+    }
+    onProgress?.({ stage: 'verify', sent: total, total });
+    const same = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
+    if (!same(await this.uploadedSha256(), await digest(image))) {
+      throw new ColdcardError('biny', 'the device received different bytes than were sent');
+    }
+    onProgress?.({ stage: 'trailer', sent: total, total });
+    await this.uploadBlock(total, total + header.length, header);
+    const whole = new Uint8Array(total + header.length);
+    whole.set(image, 0);
+    whole.set(header, total);
+    if (!same(await this.uploadedSha256(), await digest(whole))) {
+      throw new ColdcardError('biny', 'the device received a different trailer than was sent');
+    }
+    onProgress?.({ stage: 'reboot', sent: total, total });
+    await this.reboot();
   }
 }

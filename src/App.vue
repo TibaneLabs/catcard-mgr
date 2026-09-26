@@ -4,6 +4,7 @@ import logo from './assets/catcard-icon.svg';
 import DeviceFigure from './components/DeviceFigure.vue';
 import IdentityPanel from './components/IdentityPanel.vue';
 import DiagnosticsPanel from './components/DiagnosticsPanel.vue';
+import FirmwareSwitch from './components/FirmwareSwitch.vue';
 import Unsupported from './components/Unsupported.vue';
 import { connect, disconnect, reconnectGranted, session } from './session';
 
@@ -34,6 +35,14 @@ onMounted(() => {
             <h1>Talking to your {{ session.known?.label ?? 'device' }}…</h1>
             <p class="lede">Asking it who it is. If the device is asleep or locked on a screen, wake it up.</p>
           </template>
+          <template v-else-if="session.restarted">
+            <h1>Your Coldcard is installing CatCard</h1>
+            <p class="lede">
+              Follow what its screen asks. When CatCard has started, connect it here. The browser will ask for permission
+              again, because the device now has a new name.
+            </p>
+            <button class="primary big" type="button" @click="connect">Connect CatCard</button>
+          </template>
           <template v-else>
             <h1>Plug in your CatCard or Coldcard</h1>
             <p class="lede">
@@ -46,6 +55,7 @@ onMounted(() => {
         </div>
       </section>
 
+      <FirmwareSwitch v-if="session.phase === 'ready' && session.known?.kind === 'coldcard'" />
       <DiagnosticsPanel v-if="session.phase === 'ready'" />
     </template>
   </main>
