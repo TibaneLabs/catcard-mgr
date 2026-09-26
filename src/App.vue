@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { computed, onMounted } from 'vue';
 import logo from './assets/catcard-icon.svg';
 import DeviceFigure from './components/DeviceFigure.vue';
 import IdentityPanel from './components/IdentityPanel.vue';
@@ -10,6 +10,25 @@ import FirmwareSwitch from './components/FirmwareSwitch.vue';
 import HostWallet from './components/HostWallet.vue';
 import Unsupported from './components/Unsupported.vue';
 import { connect, disconnect, reconnectGranted, session } from './session';
+
+/** What to say while a device restarts to install firmware. */
+const restart = computed(() => {
+  const from = session.restartFrom === 'catcard' ? 'CatCard' : 'Coldcard';
+  const to = session.restartTarget === 'catcard' ? 'CatCard' : 'Coldcard';
+  if (!session.restartFrom || !session.restartTarget) return null;
+  if (from === to) {
+    return {
+      title: `Your ${from} is installing the update`,
+      text: 'Follow what its screen asks. When it has started again and you have unlocked it, this page reconnects to it by itself.',
+      button: `Connect the ${from}`,
+    };
+  }
+  return {
+    title: `Your ${from} is installing ${to === 'CatCard' ? 'CatCard' : 'Coldcard firmware'}`,
+    text: `Follow what its screen asks. When ${to === 'CatCard' ? 'CatCard' : 'the Coldcard firmware'} has started, connect it here. The browser will ask for permission again, because the device now has a new name.`,
+    button: `Connect the ${to}`,
+  };
+});
 
 onMounted(() => {
   void reconnectGranted();
@@ -40,21 +59,10 @@ onMounted(() => {
             <h1>Talking to your {{ session.known?.label ?? 'device' }}…</h1>
             <p class="lede">Asking it who it is. If the device is asleep or locked on a screen, wake it up.</p>
           </template>
-          <template v-else-if="session.restarted && session.restartTarget === 'coldcard'">
-            <h1>Your Coldcard is installing the update</h1>
-            <p class="lede">
-              Follow what its screen asks. When it has started again and you have unlocked it, this page reconnects to it by
-              itself.
-            </p>
-            <button class="primary big" type="button" @click="connect">Connect the Coldcard</button>
-          </template>
-          <template v-else-if="session.restarted">
-            <h1>Your Coldcard is installing CatCard</h1>
-            <p class="lede">
-              Follow what its screen asks. When CatCard has started, connect it here. The browser will ask for permission
-              again, because the device now has a new name.
-            </p>
-            <button class="primary big" type="button" @click="connect">Connect CatCard</button>
+          <template v-else-if="session.restarted && restart">
+            <h1>{{ restart.title }}</h1>
+            <p class="lede">{{ restart.text }}</p>
+            <button class="primary big" type="button" @click="connect">{{ restart.button }}</button>
           </template>
           <template v-else>
             <h1>Plug in your CatCard or Coldcard</h1>
@@ -72,7 +80,11 @@ onMounted(() => {
         <ColdcardUpdate />
         <FirmwareSwitch />
       </template>
-      <HostWallet v-if="session.phase === 'ready' && session.known?.kind === 'catcard'" />
+      <template v-if="session.phase === 'ready' && session.known?.kind === 'catcard'">
+        <HostWallet />
+        <FirmwareSwitch />
+        <ColdcardUpdate />
+      </template>
       <DiagnosticsPanel v-if="session.phase === 'ready'" />
     </template>
   </main>

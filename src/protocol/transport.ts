@@ -12,6 +12,8 @@ export interface Transport {
   write(report: Uint8Array): Promise<void>;
   /** Receive the next report, or reject with `TransportTimeout` after `timeoutMs`. */
   read(timeoutMs: number): Promise<Uint8Array>;
+  /** A report already received, if there is one, without waiting. */
+  poll(): Uint8Array | null;
   /** Throw away any reports received but not yet read. */
   drain(): void;
   close(): Promise<void>;
@@ -100,6 +102,10 @@ export class WebHidTransport implements Transport {
       }, timeoutMs);
       this.waiter = { resolve, reject, timer };
     });
+  }
+
+  poll(): Uint8Array | null {
+    return this.queue.shift() ?? null;
   }
 
   drain(): void {

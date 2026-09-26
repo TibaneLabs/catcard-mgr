@@ -8,8 +8,9 @@
  *   START:   2..4 u16 opcode (request) / status (reply), 4..8 u32 total length, 8..64 payload
  *   CONT:    2..64 payload
  */
+import type { InstallProgress } from '../firmware/install';
 import { Initiator, type Session } from './ncry';
-import { Serial, type Transport } from './transport';
+import { Serial, TransportClosed, TransportTimeout, type Transport } from './transport';
 
 export const CATCARD_VID = 0x39f2;
 export const CATCARD_PID = 0x0401;
@@ -61,6 +62,92 @@ export const STATUS_NAMES: Record<number, string> = {
 
 export function statusName(status: number): string {
   return STATUS_NAMES[status] ?? `0x${status.toString(16).padStart(4, '0')}`;
+}
+
+/** Why an offered image was refused: the first byte of a Refused reply. */
+export const REJECT_TEXT: Record<number, string> = {
+  1: 'its length is wrong',
+  2: 'it is too big for this board to stage',
+  3: 'part of it arrived out of order',
+  4: 'it ran past its declared end',
+  5: 'it arrived incomplete',
+  6: 'it is not a firmware image',
+  7: 'its header is damaged',
+  8: 'it is built for a different board',
+  9: 'it is older than the device will accept',
+  10: 'its signature does not verify',
+  11: 'the device could not store it',
+  12: 'this board has nowhere to stage an image',
+  13: 'the staging memory is in use; finish what the device is doing first',
+  14: 'the staging memory failed a read-back check',
+  15: 'its compressed form could not be unpacked',
+  16: 'its length is not aligned',
+  17: 'the device is sealed against upgrades',
+};
+
+/** Deflate block size for a packed offer; the device checks it against its own slab. */
+export const PACK_BLOCK = 8 * 1024;
+
+async function deflateRaw(block: Uint8Array): Promise<Uint8Array> {
+  const cs = new CompressionStream('deflate-raw');
+  const out = new Response(new Blob([new Uint8Array(block)]).stream().pipeThrough(cs));
+  return new Uint8Array(await out.arrayBuffer());
+}
+
+/**
+ * The image as UpgradePacked wants it: `[u32 length][u32 block size]` then one raw
+ * deflate stream per block. Nothing frames the streams; deflate marks its own end.
+ * Null where the browser cannot deflate, or where packing does not make it smaller.
+ */
+export async function packImage(image: Uint8Array, block = PACK_BLOCK): Promise<Uint8Array | null> {
+  if (typeof CompressionStream === 'undefined') return null;
+  const parts: Uint8Array[] = [];
+  const head = new Uint8Array(8);
+  const v = new DataView(head.buffer);
+  v.setUint32(0, image.length, true);
+  v.setUint32(4, block, true);
+  parts.push(head);
+  for (let at = 0; at < image.length; at += block) parts.push(await deflateRaw(image.subarray(at, at + block)));
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  if (total >= image.length) return null;
+  const out = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
+
+export interface OfferAccepted {
+  /** The board accepts the key the image is signed with. */
+  verified: boolean;
+  length: number;
+  version: string;
+  keySlot: number;
+  /** Older than the firmware running now: the device warns about it on its screen. */
+  older: boolean;
+}
+
+export function parseOfferAccepted(body: Uint8Array): OfferAccepted {
+  if (body.length < 22) throw new FramingError(`offer answer too short: ${body.length} bytes`);
+  const v = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  const raw = body.subarray(13, 21);
+  const nul = raw.indexOf(0);
+  return {
+    verified: body[0] !== 0,
+    length: v.getUint32(1, true),
+    version: dec.decode(raw.subarray(0, nul < 0 ? 8 : nul)),
+    keySlot: body[21]!,
+    older: (body[22] ?? 0) !== 0,
+  };
+}
+
+export class OfferError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = 'OfferError';
+  }
 }
 
 /** Device state bits in an Identify reply. */
@@ -315,6 +402,87 @@ export class CatCardClient {
     const r = await this.request(Opcode.PairReveal, host.public);
     if (r.status !== Status.Ok) throw new PairingError(`The CatCard refused the pairing (${statusName(r.status)}).`);
     return new PendingPairing(this, session);
+  }
+
+  /**
+   * Sends one upgrade offer and returns the device's answer. The device may answer on the
+   * first frame (locked, or an earlier offer waiting), so replies are watched for while
+   * the frames go out, and sending stops as soon as one arrives.
+   */
+  private sendOffer(opcode: number, payload: Uint8Array, onSent: (n: number) => void): Promise<Reply> {
+    return this.serial.run(async () => {
+      this.transport.drain();
+      const decoder = new ReplyDecoder();
+      const frames = encodeFrames(opcode, payload);
+      for (let i = 0; i < frames.length; i++) {
+        await this.transport.write(frames[i]!);
+        if (i % 16 === 0 || i === frames.length - 1) {
+          onSent(Math.min(payload.length, START_PAYLOAD + i * CONT_PAYLOAD));
+          for (let r = this.transport.poll(); r; r = this.transport.poll()) {
+            const reply = decoder.feed(r);
+            if (reply) return reply;
+          }
+        }
+      }
+      // Checking the signature over a whole image takes the device a moment.
+      for (;;) {
+        const reply = decoder.feed(await this.transport.read(60_000));
+        if (reply) return reply;
+      }
+    });
+  }
+
+  /**
+   * Offers a raw signed image (not a .dfu) for installation, deflated when the device can
+   * take that. Resolves once the device has checked it and put the question on its
+   * screen; `awaitApproval` then waits for the person's answer.
+   */
+  async offerImage(image: Uint8Array, capBits: number, onProgress?: (p: InstallProgress) => void): Promise<OfferAccepted> {
+    let reply: Reply | null = null;
+    const report = (sent: number, total: number) =>
+      onProgress?.({ stage: sent >= total ? 'inspect' : 'upload', sent: Math.min(sent, total), total });
+    if (capBits & caps.UPGRADE_PACKED) {
+      const packed = await packImage(image);
+      if (packed) {
+        reply = await this.sendOffer(Opcode.UpgradePacked, packed, (n) => report(n, packed.length));
+        // Not a refusal of the image: the device has no room to inflate right now.
+        if (reply.status === Status.RetryUncompressed) reply = null;
+      }
+    }
+    reply ??= await this.sendOffer(Opcode.UpgradeOffer, image, (n) => report(n, image.length));
+    if (reply.status === Status.Ok) return parseOfferAccepted(reply.body);
+    if (reply.status === Status.NotNow) {
+      throw new OfferError('The CatCard cannot take it now: it is locked, or an earlier offer is waiting for an answer on its screen. Answer that, or unlock it, then try again.');
+    }
+    if (reply.status === Status.Busy) throw new OfferError('The CatCard is busy. Finish what it is doing, then try again.');
+    if (reply.status === Status.Refused) {
+      const why = REJECT_TEXT[reply.body[0] ?? 0] ?? `reason ${reply.body[0] ?? 'unknown'}`;
+      throw new OfferError(`The CatCard refused the image: ${why}.`);
+    }
+    throw new OfferError(`The CatCard answered ${statusName(reply.status)}.`);
+  }
+
+  /**
+   * Waits for the person to answer the offer on the device. It restarts to install on a
+   * yes, which from here looks like the device leaving the bus; a no arrives as Declined.
+   */
+  awaitApproval(waitMs = 15 * 60_000): Promise<'restarting' | 'declined'> {
+    return this.serial.run(async () => {
+      const decoder = new ReplyDecoder();
+      const deadline = Date.now() + waitMs;
+      for (;;) {
+        let r: Uint8Array;
+        try {
+          r = await this.transport.read(Math.max(1, Math.min(30_000, deadline - Date.now())));
+        } catch (err) {
+          if (err instanceof TransportClosed) return 'restarting';
+          if (err instanceof TransportTimeout && Date.now() < deadline) continue;
+          throw new OfferError('Nobody answered on the CatCard. The offer is still on its screen until it is answered or unplugged.');
+        }
+        const reply = decoder.feed(r);
+        if (reply?.status === Status.Declined) return 'declined';
+      }
+    });
   }
 
   /** One sealed command inside a session: the inner status and payload. */

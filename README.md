@@ -23,6 +23,9 @@ entirely in your browser and talks to the device with WebHID. No server is invol
   Ethereum transaction or a Solana transaction. Every request is approved on the CatCard, and only accounts shared
   in the same session can sign. For a PSBT the page finds this wallet's keys from its derivation records, so nobody
   types paths. Pairing ends when the CatCard is unplugged or the page reloads.
+- **Updates a CatCard, or returns it to official Coldcard firmware,** with no pairing needed. The image is checked
+  the same way as for a Coldcard, then offered to the CatCard in one message, deflated when the CatCard can take
+  that. The CatCard checks it and shows it on its own screen; nothing is installed until the person approves there.
 - **Warns about vulnerable Coldcard firmware.** A Coldcard running 4.x below 4.2.0, 5.x below 5.6.0, or a Q1 below
   1.5.0Q (the early 0.xQ builds included) gets a full-width warning to upgrade now, with buttons for the official update or CatCard. Seeds
   those versions generate on the device are weak, and the warning says so: a seed made there stays weak after the

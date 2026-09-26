@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { panelRequest } from '../panels';
+import { caps } from '../protocol/catcard';
 import { BOARD_LABELS, boardFor, downloadImage, loadReleases, pickImage, type Board, type FirmwareRelease } from '../firmware/catalog';
 import { session } from '../session';
 import InstallSteps from './InstallSteps.vue';
@@ -13,16 +14,26 @@ const chosenBoard = ref<Board | null>(null);
 const bitcoinOnly = ref(true);
 const games = ref(false);
 
-const hardware = computed(() => (session.info?.kind === 'coldcard' ? session.info.version.hardware : null));
+/** On a CatCard this panel updates CatCard; on a Coldcard it replaces the stock firmware. */
+const onCatCard = computed(() => session.info?.kind === 'catcard');
+const canInstall = computed(() => session.info?.kind !== 'catcard' || (session.info.identify.caps & caps.UPGRADE) !== 0);
+const hardware = computed(() =>
+  session.info?.kind === 'coldcard' ? session.info.version.hardware : session.info?.kind === 'catcard' ? session.info.identify.board : null,
+);
+const running = computed(() => (session.info?.kind === 'catcard' ? session.info.identify.version : ''));
 const detectedBoard = computed(() => boardFor(hardware.value));
 const board = computed<Board | null>(() => detectedBoard.value ?? chosenBoard.value);
 const release = computed(() => releases.value?.find((r) => r.tag === releaseTag.value) ?? null);
 const image = computed(() => (release.value && board.value ? pickImage(release.value, board.value, bitcoinOnly.value, games.value) : null));
 
-const agreements = [
-  'I have written down my seed words, and I understand CatCard is not ready to hold funds.',
-  'I accept that installing CatCard may make this Coldcard permanently unusable. I install it at my own risk. Tibane Labs and the people behind CatCard are not responsible for any Coldcard that is lost, damaged or made unusable, or for anything stored on it.',
-];
+const agreements = computed(() =>
+  onCatCard.value
+    ? ['I have written down my seed words, and I understand CatCard is not ready to hold funds.']
+    : [
+        'I have written down my seed words, and I understand CatCard is not ready to hold funds.',
+        'I accept that installing CatCard may make this Coldcard permanently unusable. I install it at my own risk. Tibane Labs and the people behind CatCard are not responsible for any Coldcard that is lost, damaged or made unusable, or for anything stored on it.',
+      ],
+);
 const signer = (n: number) => (n === 0 ? 'the published developer key' : `key ${n}`);
 
 async function start(): Promise<void> {
@@ -49,15 +60,24 @@ watch(panelRequest, async (r) => {
 
 <template>
   <section ref="root" class="switch" aria-labelledby="switch-title">
-    <h2 id="switch-title">Switch this Coldcard to CatCard</h2>
-    <p class="intro">
+    <h2 id="switch-title">{{ onCatCard ? 'Update CatCard' : 'Switch this Coldcard to CatCard' }}</h2>
+    <p v-if="onCatCard" class="intro">
+      Install another CatCard release. This one runs {{ running || 'an unknown version' }}. The CatCard shows what it
+      received and installs nothing until you approve it there.
+    </p>
+    <p v-else class="intro">
       CatCard is open-source firmware for Coldcard hardware. Installing it replaces the Coldcard firmware on this device.
     </p>
 
-    <button v-if="!open" class="primary" type="button" @click="start">Choose a CatCard version</button>
+    <p v-if="!canInstall" class="hint">This CatCard cannot take a firmware over USB.</p>
+    <button v-else-if="!open" class="primary" type="button" @click="start">Choose a CatCard version</button>
 
     <template v-else>
-      <ul class="warnings">
+      <ul v-if="onCatCard" class="warnings">
+        <li>CatCard is early software. Do not keep funds on a device running it.</li>
+        <li>Write down this wallet's seed words before you start, and keep them whatever happens.</li>
+      </ul>
+      <ul v-else class="warnings">
         <li class="severe">
           <strong>Installing CatCard can permanently break this Coldcard.</strong> A Coldcard is designed to lock itself
           up for good when anything looks even slightly wrong, and nobody can repair it after that. Only continue with a
@@ -88,9 +108,9 @@ watch(panelRequest, async (r) => {
 
         <div class="field">
           <span class="legend">Hardware</span>
-          <p v-if="detectedBoard">This Coldcard reports itself as {{ hardware }}. The {{ BOARD_LABELS[detectedBoard] }} image will be used.</p>
+          <p v-if="detectedBoard">This {{ onCatCard ? 'CatCard' : 'Coldcard' }} reports itself as {{ hardware }}. The {{ BOARD_LABELS[detectedBoard] }} image will be used.</p>
           <template v-else>
-            <p class="hint">This Coldcard did not report its model. Pick the one printed on it.</p>
+            <p class="hint">This device did not report its model. Pick the one printed on it.</p>
             <div class="options">
               <label v-for="(label, b) in BOARD_LABELS" :key="b">
                 <input v-model="chosenBoard" type="radio" name="board" :value="b" />
@@ -141,7 +161,7 @@ watch(panelRequest, async (r) => {
         :signer-text="signer"
         :agreements="agreements"
         target="catcard"
-        install-label="Install CatCard"
+        :install-label="onCatCard ? 'Install this version' : 'Install CatCard'"
       />
     </template>
 

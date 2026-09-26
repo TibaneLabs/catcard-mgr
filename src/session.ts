@@ -5,11 +5,13 @@
  * and a management page acting on two wallets at once is a way to act on the wrong one.
  */
 import { reactive, readonly } from 'vue';
-import { CatCardClient, PairingError, type DeviceLog, type Identify, type PendingPairing } from './protocol/catcard';
+import { sha256 } from './firmware/catalog';
+import type { InstallProgress } from './firmware/install';
+import { CatCardClient, OfferError, PairingError, type DeviceLog, type Identify, type PendingPairing } from './protocol/catcard';
 import type { AddressReply, Call } from './protocol/hostwallet';
 import type { Session as NcrySession } from './protocol/ncry';
 import { ColdcardClient, type ColdcardVersion } from './protocol/coldcard';
-import { classify, grantedDevices, isWebHidSupported, requestDevice, type KnownDevice } from './protocol/device';
+import { classify, grantedDevices, isWebHidSupported, requestDevice, type DeviceKind, type KnownDevice } from './protocol/device';
 import { WebHidTransport } from './protocol/transport';
 
 export type Info =
@@ -46,6 +48,8 @@ interface State {
   restarted: boolean;
   /** Which firmware that restart installs. */
   restartTarget: InstallTarget | null;
+  /** Which device restarted: decides whether it comes back under the same name. */
+  restartFrom: DeviceKind | null;
   /** A CatCard channel paired for this connection; gone on unplug or reload. */
   paired: boolean;
   /** What the CatCard last shared on this paired session; signing needs it. */
@@ -68,6 +72,7 @@ const state = reactive<State>({
   installing: false,
   restarted: false,
   restartTarget: null,
+  restartFrom: null,
   paired: false,
   addresses: null,
 });
@@ -144,6 +149,7 @@ async function attach(dev: HIDDevice): Promise<void> {
     }
     state.restarted = false;
     state.restartTarget = null;
+    state.restartFrom = null;
     await identify();
     state.phase = 'ready';
   } catch (err) {
@@ -290,18 +296,43 @@ export function coldcardClient(): ColdcardClient | null {
 }
 
 /**
- * Runs a firmware install. The device is expected to leave the bus when it finishes,
- * so that departure is reported as a restart, not as an unplug.
+ * Installs a firmware image on whichever device is connected. The device is expected to
+ * leave the bus when it restarts to install, so that departure is reported as a restart,
+ * not as an unplug. Resolves once the install has been handed to the device.
+ *
+ * A Coldcard takes the image through stock firmware's uploader and restarts when asked.
+ * A CatCard takes it as one offer, checks it, and puts it on its own screen: nothing is
+ * installed until the person approves there.
  */
-export async function runInstall(target: InstallTarget, job: (c: ColdcardClient) => Promise<void>): Promise<void> {
-  const c = coldcardClient();
-  if (!c) throw new Error('No Coldcard is connected.');
+export async function installImage(
+  target: InstallTarget,
+  image: Uint8Array,
+  header: Uint8Array,
+  onProgress: (p: InstallProgress) => void,
+): Promise<void> {
+  const c = client;
+  if (!c || !state.known) throw new Error('No device is connected.');
   state.installing = true;
   state.restartTarget = target;
+  state.restartFrom = state.known.kind;
   state.busy = true;
   try {
-    await job(c);
+    if (c instanceof ColdcardClient) {
+      await c.installFirmware(image, header, sha256, onProgress);
+    } else {
+      const capBits = state.info?.kind === 'catcard' ? state.info.identify.caps : 0;
+      const accepted = await c.offerImage(image, capBits, onProgress);
+      const offer = { verified: accepted.verified, older: accepted.older, version: accepted.version };
+      onProgress({ stage: 'approve', sent: image.length, total: image.length, offer });
+      const outcome = await c.awaitApproval();
+      if (outcome === 'declined') throw new OfferError('Declined on the CatCard. Nothing was installed.');
+      onProgress({ stage: 'reboot', sent: image.length, total: image.length, offer });
+    }
     state.restarted = true;
+  } catch (err) {
+    // Nothing is restarting after all: a later unplug is an unplug.
+    state.installing = false;
+    throw err;
   } finally {
     state.busy = false;
   }

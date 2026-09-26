@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
+import { urgentUpgrade } from '../firmware/advisory';
 import { panelRequest } from '../panels';
+import { caps } from '../protocol/catcard';
 import { COINKITE_FINGERPRINT, COINKITE_SIGNER } from '../firmware/coinkite-key';
 import {
   boardsFor,
@@ -27,8 +29,13 @@ const showEdge = ref(false);
 const chosenModel = ref<string | null>(null);
 const chosenFile = ref('');
 
+/** On a Coldcard this updates it; on a CatCard it goes back to official firmware. */
+const onCatCard = computed(() => session.info?.kind === 'catcard');
+const canInstall = computed(() => session.info?.kind !== 'catcard' || (session.info.identify.caps & caps.UPGRADE) !== 0);
 const info = computed(() => (session.info?.kind === 'coldcard' ? session.info.version : null));
-const reported = computed(() => info.value?.hardware?.toLowerCase() ?? null);
+const reported = computed(() =>
+  (session.info?.kind === 'coldcard' ? session.info.version.hardware : session.info?.kind === 'catcard' ? session.info.identify.board : null)?.toLowerCase() ?? null,
+);
 const reportedBoards = computed(() => (reported.value ? boardsFor(reported.value) : []));
 const model = computed(() => (reportedBoards.value.length ? reported.value : chosenModel.value));
 const boards = computed<NamedBoard[]>(() => (model.value ? boardsFor(model.value) : []));
@@ -52,8 +59,15 @@ function label(i: { version: string; built: string; edge: boolean }): string {
 
 const notes = computed(() => {
   const i = image.value;
-  if (!i || !installed.value) return [];
+  if (!i) return [];
   const out: string[] = [];
+  const weak = urgentUpgrade(i.version);
+  if (weak) out.push(`This version generates weak wallet seeds. Coinkite fixed that in ${weak.fixedIn}. Pick ${weak.fixedIn} or later.`);
+  if (onCatCard.value) {
+    if (i.edge) out.push("Edge builds are Coinkite's experimental releases. They are signed, but meant for testing.");
+    return out;
+  }
+  if (!installed.value) return out;
   const cmp = compareVersions(i.version, installed.value);
   if (cmp < 0) out.push(`This is older than the installed ${installed.value}. The Coldcard may refuse to go back to it.`);
   if (cmp === 0 && !i.edge === !installed.value.endsWith('X')) out.push('This version is already installed.');
@@ -89,10 +103,15 @@ watch(panelRequest, async (r) => {
 
 <template>
   <section ref="root" class="update" aria-labelledby="update-title">
-    <h2 id="update-title">Update the Coldcard firmware</h2>
-    <p class="intro">Install an official Coldcard release, checked against the list of files Coinkite signs.</p>
+    <h2 id="update-title">{{ onCatCard ? 'Return to official Coldcard firmware' : 'Update the Coldcard firmware' }}</h2>
+    <p v-if="onCatCard" class="intro">
+      Replace CatCard with an official Coldcard release, checked against the list of files Coinkite signs. The CatCard
+      shows what it received and installs nothing until you approve it there.
+    </p>
+    <p v-else class="intro">Install an official Coldcard release, checked against the list of files Coinkite signs.</p>
 
-    <button v-if="!open" class="primary" type="button" @click="start">Choose a Coldcard version</button>
+    <p v-if="!canInstall" class="hint">This CatCard cannot take a firmware over USB.</p>
+    <button v-else-if="!open" class="primary" type="button" @click="start">Choose a Coldcard version</button>
 
     <template v-else-if="list">
       <p class="signed">
@@ -103,7 +122,7 @@ watch(panelRequest, async (r) => {
       <fieldset class="choices" :disabled="session.installing">
         <div v-if="!reportedBoards.length" class="field">
           <span class="legend">Hardware</span>
-          <p class="hint">This Coldcard did not report its model. Pick the one printed on it.</p>
+          <p class="hint">This device did not report its model. Pick the one printed on it.</p>
           <div class="options">
             <label v-for="m in MODELS" :key="m.hardware">
               <input v-model="chosenModel" type="radio" name="cc-model" :value="m.hardware" @change="pickDefault" />

@@ -5,6 +5,7 @@ import {
   CONT_PAYLOAD,
   encodeFrames,
   FramingError,
+  packImage,
   KIND_CONT,
   KIND_START,
   Opcode,
@@ -152,5 +153,80 @@ describe('pairing refusals', () => {
   it('says to wait when a pairing was started moments ago', async () => {
     const t = new FakeTransport(() => encodeFrames(Status.Busy, new Uint8Array()));
     await expect(new CatCardClient(t).startPairing()).rejects.toThrow(/wait/);
+  });
+});
+
+describe('firmware offers', () => {
+  const image = Uint8Array.from({ length: 40_000 }, (_, i) => (i % 97 === 0 ? i & 0xff : 0));
+  const accepted = () => {
+    const b = new Uint8Array(23);
+    b[0] = 1;
+    new DataView(b.buffer).setUint32(1, image.length, true);
+    b.set(new TextEncoder().encode('7.1.0a1'), 13);
+    b[21] = 0;
+    b[22] = 1;
+    return b;
+  };
+
+  it('packs an image into one raw deflate stream per block', async () => {
+    const { inflateRawSync } = await import('node:zlib');
+    const one = (await packImage(image, 64 * 1024))!;
+    const v = new DataView(one.buffer);
+    expect(v.getUint32(0, true)).toBe(image.length);
+    expect(v.getUint32(4, true)).toBe(64 * 1024);
+    expect(new Uint8Array(inflateRawSync(one.subarray(8)))).toEqual(image);
+    const blocks = (await packImage(image))!;
+    expect(blocks.length).toBeLessThan(image.length);
+    expect(await packImage(crypto.getRandomValues(new Uint8Array(4096)))).toBeNull();
+  });
+
+  it('stops sending as soon as the device answers early', async () => {
+    let frames = 0;
+    const t = new FakeTransport((report) => {
+      frames++;
+      return report[0] === KIND_START ? encodeFrames(Status.NotNow, new Uint8Array()) : [];
+    });
+    await expect(new CatCardClient(t).offerImage(image, caps.UPGRADE)).rejects.toThrow(/earlier offer is waiting/);
+    expect(frames).toBeLessThan(40);
+  });
+
+  it('resends uncompressed when the device has no room to inflate', async () => {
+    const ops: number[] = [];
+    const t = new FakeTransport((report, all) => {
+      if (report[0] === KIND_START) ops.push(new DataView(report.buffer).getUint16(2, true));
+      const d = new ReplyDecoder();
+      let msg = null;
+      for (const r of all) msg = d.feed(r) ?? msg;
+      if (!msg) return [];
+      all.length = 0;
+      return ops.at(-1) === Opcode.UpgradePacked ? encodeFrames(Status.RetryUncompressed, new Uint8Array()) : encodeFrames(Status.Ok, accepted());
+    });
+    const stages: string[] = [];
+    const a = await new CatCardClient(t).offerImage(image, caps.UPGRADE | caps.UPGRADE_PACKED, (p) => stages.push(p.stage));
+    expect(ops).toEqual([Opcode.UpgradePacked, Opcode.UpgradeOffer]);
+    expect(a).toEqual({ verified: true, length: image.length, version: '7.1.0a1', keySlot: 0, older: true });
+    expect(stages).toContain('upload');
+    expect(stages.at(-1)).toBe('inspect');
+  });
+
+  it('says why an image was refused', async () => {
+    const t = new FakeTransport((report, all) => {
+      const d = new ReplyDecoder();
+      let msg = null;
+      for (const r of all) msg = d.feed(r) ?? msg;
+      if (!msg) return [];
+      all.length = 0;
+      return encodeFrames(Status.Refused, Uint8Array.of(8));
+    });
+    await expect(new CatCardClient(t).offerImage(image, caps.UPGRADE)).rejects.toThrow('The CatCard refused the image: it is built for a different board.');
+  });
+
+  it('hears a decline, or the device leaving to install', async () => {
+    const declined = new FakeTransport(() => []);
+    declined.push(encodeFrames(Status.Declined, new Uint8Array())[0]!);
+    expect(await new CatCardClient(declined).awaitApproval(5_000)).toBe('declined');
+    const gone = new FakeTransport(() => []);
+    gone.gone = true;
+    expect(await new CatCardClient(gone).awaitApproval(5_000)).toBe('restarting');
   });
 });

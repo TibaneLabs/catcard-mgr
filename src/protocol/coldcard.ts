@@ -8,7 +8,10 @@
  * A message is a four-character ASCII command followed by its arguments; a reply is a
  * four-character tag followed by its data. Only the unencrypted subset is implemented.
  */
+import type { InstallProgress } from '../firmware/install';
 import { Serial, TransportTimeout, type Transport } from './transport';
+
+export type { InstallProgress };
 
 export const COLDCARD_VID = 0xd13e;
 export const COLDCARD_PID = 0xcc10;
@@ -202,12 +205,6 @@ function u32s(...values: number[]): Uint8Array {
 export function uploadMessage(offset: number, total: number, data: Uint8Array): Uint8Array {
   if (data.length > MAX_BLK_LEN) throw new RangeError(`block of ${data.length} bytes exceeds ${MAX_BLK_LEN}`);
   return cmd('upld', u32s(offset, total), data);
-}
-
-export interface InstallProgress {
-  stage: 'upload' | 'verify' | 'trailer' | 'reboot';
-  sent: number;
-  total: number;
 }
 
 export class ColdcardClient {

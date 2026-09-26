@@ -6,11 +6,10 @@
  * checked image and its agreements never carry over to another file.
  */
 import { computed, ref } from 'vue';
-import { sha256 } from '../firmware/catalog';
 import { parseDfu } from '../firmware/dfu';
 import { checkImage, compatibleHardware, parseHeader, type FirmwareHeader } from '../firmware/header';
-import type { InstallProgress } from '../protocol/coldcard';
-import { runInstall, session, type InstallTarget } from '../session';
+import type { InstallProgress } from '../firmware/install';
+import { installImage, session, type InstallTarget } from '../session';
 
 const props = defineProps<{
   fileName: string;
@@ -36,7 +35,10 @@ const checked = ref<{ image: Uint8Array; header: FirmwareHeader; problems: strin
 const ticks = ref<boolean[]>(props.agreements.map(() => false));
 const progress = ref<InstallProgress | null>(null);
 
-const hardware = computed(() => (session.info?.kind === 'coldcard' ? session.info.version.hardware : null));
+const hardware = computed(() =>
+  session.info?.kind === 'coldcard' ? session.info.version.hardware : session.info?.kind === 'catcard' ? session.info.identify.board : null,
+);
+const device = computed(() => (session.known?.kind === 'catcard' ? 'CatCard' : 'Coldcard'));
 const allTicked = computed(() => ticks.value.every(Boolean));
 const kb = (n: number) => `${Math.round(n / 1024).toLocaleString()} KB`;
 
@@ -62,10 +64,13 @@ async function install(): Promise<void> {
   step.value = 'installing';
   progress.value = { stage: 'upload', sent: 0, total: c.image.length };
   try {
-    await runInstall(props.target, (cc) => cc.installFirmware(c.image, c.header.raw, sha256, (p) => (progress.value = p)));
+    await installImage(props.target, c.image, c.header.raw, (p) => (progress.value = p));
     step.value = 'sent';
   } catch (err) {
-    error.value = `The install stopped: ${err instanceof Error ? err.message : String(err)}. Nothing was installed. Check the Coldcard's screen, then try again.`;
+    const msg = err instanceof Error ? err.message : String(err);
+    error.value = /Nothing was installed/.test(msg)
+      ? msg
+      : `The install stopped: ${msg.replace(/\.$/, '')}. Nothing was installed. Check the ${device.value}'s screen, then try again.`;
     step.value = 'checked';
   }
 }
@@ -79,17 +84,26 @@ const stageText = computed(() => {
   if (!p) return '';
   switch (p.stage) {
     case 'upload':
-      return `Sending ${kb(p.sent)} of ${kb(p.total)}`;
+      return `Sending ${kb(p.sent)} of ${kb(p.total)}. Keep the ${device.value} plugged in.`;
     case 'verify':
-      return 'Checking what the Coldcard received';
+      return `Checking what the ${device.value} received. Keep it plugged in.`;
     case 'trailer':
-      return 'Sending the signature header';
+      return 'Sending the signature header. Keep it plugged in.';
+    case 'inspect':
+      return 'The CatCard is checking the image it received.';
+    case 'approve': {
+      const notes = [p.offer?.older ? 'The CatCard notes this is older than the firmware it runs.' : '', p.offer && !p.offer.verified ? 'The CatCard does not recognise the key this image is signed with.' : '']
+        .filter(Boolean)
+        .join(' ');
+      return `Approve the install on the CatCard's screen, or refuse it there.${notes ? ` ${notes}` : ''}`;
+    }
     case 'reboot':
-      return 'Asking the Coldcard to restart and install';
+      return `The ${device.value} is restarting to install.`;
   }
   return '';
 });
-const percent = computed(() => (progress.value ? Math.round((progress.value.sent / progress.value.total) * 100) : 0));
+const percent = computed(() => (progress.value ? Math.round((progress.value.sent / Math.max(1, progress.value.total)) * 100) : 0));
+const waitingOnPerson = computed(() => progress.value?.stage === 'approve');
 </script>
 
 <template>
@@ -135,7 +149,7 @@ const percent = computed(() => (progress.value ? Math.round((progress.value.sent
         <ul v-if="notes?.length" class="notes">
           <li v-for="n in notes" :key="n">{{ n }}</li>
         </ul>
-        <p class="hint">The Coldcard must be unlocked with its PIN, and left on its main menu, while the image is sent.</p>
+        <p class="hint">The {{ device }} must be unlocked with its PIN, and left on its main menu, while the image is sent.</p>
         <label v-for="(a, i) in agreements" :key="a" class="agree">
           <input v-model="ticks[i]" type="checkbox" :disabled="step === 'installing'" />
           <span>{{ a }}</span>
@@ -147,12 +161,12 @@ const percent = computed(() => (progress.value ? Math.round((progress.value.sent
     </div>
 
     <div v-if="step === 'installing'" class="progress" role="status" aria-live="polite">
-      <div class="bar"><div class="fill" :style="{ width: `${percent}%` }" /></div>
-      <p>{{ stageText }}. Keep the Coldcard plugged in.</p>
+      <div v-if="!waitingOnPerson" class="bar"><div class="fill" :style="{ width: `${percent}%` }" /></div>
+      <p :class="{ ask: waitingOnPerson }">{{ stageText }}</p>
     </div>
 
     <div v-if="step === 'sent'" class="sent" role="status">
-      <h3>Sent. The Coldcard is restarting to install it.</h3>
+      <h3>Sent. The {{ device }} is restarting to install it.</h3>
       <p>Watch its screen and follow what it asks.</p>
     </div>
 
@@ -253,6 +267,11 @@ input[type='checkbox'] {
   height: 100%;
   background: var(--cat);
   transition: width 200ms linear;
+}
+
+.ask {
+  font-weight: 700;
+  font-size: 1.1rem;
 }
 
 .sent {
