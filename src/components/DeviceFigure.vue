@@ -8,7 +8,7 @@ const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '×', '0', '✓'];
 const lines = computed<string[]>(() => {
   const s = session;
   if (s.phase === 'connecting') return ['hello?', '', ''];
-  if (s.restarted && s.phase !== 'ready') return ['installing', 'catcard...', ''];
+  if (s.restarted && s.phase !== 'ready') return ['installing', s.restartTarget === 'coldcard' ? 'update...' : 'catcard...', ''];
   if (s.phase !== 'ready' || !s.info) return ['no device', '', ''];
   if (s.info.kind === 'catcard') {
     const id = s.info.identify;

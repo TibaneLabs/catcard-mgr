@@ -16,6 +16,9 @@ export type Info =
 
 export type Phase = 'idle' | 'connecting' | 'ready' | 'error';
 
+/** What an install puts on the device: decides what the page says while it restarts. */
+export type InstallTarget = 'catcard' | 'coldcard';
+
 export interface PingResult {
   ms: number;
   ok: boolean;
@@ -39,6 +42,8 @@ interface State {
   installing: boolean;
   /** Set when the device left because it restarted to install firmware. */
   restarted: boolean;
+  /** Which firmware that restart installs. */
+  restartTarget: InstallTarget | null;
 }
 
 const state = reactive<State>({
@@ -56,6 +61,7 @@ const state = reactive<State>({
   busy: false,
   installing: false,
   restarted: false,
+  restartTarget: null,
 });
 
 let device: HIDDevice | null = null;
@@ -121,6 +127,7 @@ async function attach(dev: HIDDevice): Promise<void> {
       client = cc;
     }
     state.restarted = false;
+    state.restartTarget = null;
     await identify();
     state.phase = 'ready';
   } catch (err) {
@@ -232,10 +239,11 @@ export function coldcardClient(): ColdcardClient | null {
  * Runs a firmware install. The device is expected to leave the bus when it finishes,
  * so that departure is reported as a restart, not as an unplug.
  */
-export async function runInstall(job: (c: ColdcardClient) => Promise<void>): Promise<void> {
+export async function runInstall(target: InstallTarget, job: (c: ColdcardClient) => Promise<void>): Promise<void> {
   const c = coldcardClient();
   if (!c) throw new Error('No Coldcard is connected.');
   state.installing = true;
+  state.restartTarget = target;
   state.busy = true;
   try {
     await job(c);

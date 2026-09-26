@@ -17,6 +17,11 @@ entirely in your browser and talks to the device with WebHID. No server is invol
   firmware version, build date, bootloader, hardware and network.
 - **Checks the connection.** Ping sends random bytes and checks the echo.
 - **Reads the CatCard diagnostic log**, which never contains the PIN or seed.
+- **Updates a Coldcard's own firmware.** With a Coldcard connected, the page offers every official release for its
+  model, newest first, with Coinkite's experimental Edge builds behind a switch. The list comes from Coinkite's
+  `signatures.txt`, whose PGP signature is checked against Coinkite's release key before any line of it is used.
+  A downloaded file must match the checksum in that signed list. Images that also rewrite the bootloader are never
+  offered, and an older version than the one installed is flagged.
 - **Switches a Coldcard to CatCard.** With a Coldcard connected, the page offers to install CatCard. You pick a
   release, Bitcoin only or all chains, and with or without the games. The page picks the image for the Coldcard's
   model, then checks it before sending anything. The file must match the SHA-256 that GitHub lists for it, and the
@@ -54,6 +59,22 @@ is offered as soon as it is published. GitHub serves the files themselves from a
 which stops a web page from reading them, so the page downloads them through
 [gh-release.tibane.net](https://gh-release.tibane.net/), a caching proxy that adds those headers. The proxy is not
 trusted: a file that does not match GitHub's digest is refused.
+
+### Official Coldcard firmware
+
+Coldcard releases come from [TibaneLabs/coldcard-firmware-archive](https://github.com/TibaneLabs/coldcard-firmware-archive),
+an unofficial archive of Coinkite's signed images. The archive is not trusted either. Trust comes from Coinkite's
+`signatures.txt`, a list of SHA-256 checksums clearsigned with Coinkite's release key:
+
+```
+Peter D. Gray <peter@coinkite.com>
+4589 779A DFC1 4F33 2753  4EA8 A3A3 1BAD 5A2A 5B10
+```
+
+That key is pinned in `src/firmware/coinkite-key.ts`, and the page checks the block against the fingerprint before
+using it. The signature check is a small RSA verifier in `src/firmware/pgp.ts` on top of WebCrypto, tested against
+the real file and tampered copies. The list is read from raw.githubusercontent.com. The images are stored in Git LFS,
+so they are read from media.githubusercontent.com, which serves the real file with CORS headers.
 
 ## Clean-room note
 
