@@ -28,6 +28,7 @@ const games = ref(false);
 const download = ref({ got: 0, total: 0 });
 const checked = ref<{ image: Uint8Array; header: FirmwareHeader; file: FirmwareImage; problems: string[] } | null>(null);
 const agreed = ref(false);
+const acceptedRisk = ref(false);
 const progress = ref<InstallProgress | null>(null);
 
 const hardware = computed(() => (session.info?.kind === 'coldcard' ? session.info.version.hardware : null));
@@ -56,6 +57,7 @@ watch([releaseTag, board, bitcoinOnly, games], () => {
   if (step.value === 'checked') step.value = 'choose';
   checked.value = null;
   agreed.value = false;
+  acceptedRisk.value = false;
 });
 
 async function check(): Promise<void> {
@@ -79,7 +81,7 @@ async function check(): Promise<void> {
 
 async function install(): Promise<void> {
   const c = checked.value;
-  if (!c || c.problems.length || !agreed.value) return;
+  if (!c || c.problems.length || !agreed.value || !acceptedRisk.value) return;
   error.value = null;
   step.value = 'installing';
   progress.value = { stage: 'upload', sent: 0, total: c.image.length };
@@ -121,6 +123,11 @@ const percent = computed(() => (progress.value ? Math.round((progress.value.sent
 
     <template v-else>
       <ul class="warnings">
+        <li class="severe">
+          <strong>Installing CatCard can permanently break this Coldcard.</strong> A Coldcard is designed to lock itself
+          up for good when anything looks even slightly wrong, and nobody can repair it after that. Only continue with a
+          device you can afford to lose.
+        </li>
         <li>CatCard is early software. Do not keep funds on a device running it.</li>
         <li>Write down this wallet's seed words before you start, and keep them whatever happens.</li>
         <li>
@@ -231,7 +238,17 @@ const percent = computed(() => (progress.value ? Math.round((progress.value.sent
             <input v-model="agreed" type="checkbox" :disabled="step === 'installing'" />
             I have written down my seed words, and I understand CatCard is not ready to hold funds.
           </label>
-          <button v-if="step === 'checked'" class="primary" type="button" :disabled="!agreed" @click="install">Install CatCard</button>
+          <label class="agree">
+            <input v-model="acceptedRisk" type="checkbox" :disabled="step === 'installing'" />
+            <span>
+              I accept that installing CatCard may make this Coldcard permanently unusable. I install it at my own risk.
+              Tibane Labs and the people behind CatCard are not responsible for any Coldcard that is lost, damaged or
+              made unusable, or for anything stored on it.
+            </span>
+          </label>
+          <button v-if="step === 'checked'" class="primary" type="button" :disabled="!agreed || !acceptedRisk" @click="install">
+            Install CatCard
+          </button>
         </template>
       </div>
 
@@ -276,6 +293,10 @@ h3 {
 .intro,
 .hint {
   color: var(--muted);
+}
+
+.warnings .severe {
+  color: var(--hazard);
 }
 
 .warnings {
