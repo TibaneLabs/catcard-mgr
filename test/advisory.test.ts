@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { urgentUpgrade } from '../src/firmware/advisory';
 
 describe('urgent upgrade rule', () => {
-  it('flags 4.x below 4.2.0, and older Mk3 releases', () => {
+  it('flags 4.x below 4.2.0, but not the unaffected 3.x', () => {
     expect(urgentUpgrade('4.1.9')).toEqual({ fixedIn: '4.2.0' });
     expect(urgentUpgrade('4.0.1')).toEqual({ fixedIn: '4.2.0' });
-    expect(urgentUpgrade('3.2.2')).toEqual({ fixedIn: '4.2.0' });
+    expect(urgentUpgrade('3.2.2')).toBeNull();
+    expect(urgentUpgrade('3.0.6')).toBeNull();
     expect(urgentUpgrade('4.2.0')).toBeNull();
     expect(urgentUpgrade('4.2.1')).toBeNull();
   });

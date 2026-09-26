@@ -17,8 +17,8 @@ entirely in your browser and talks to the device with WebHID. No server is invol
   firmware version, build date, bootloader, hardware and network.
 - **Checks the connection.** Ping sends random bytes and checks the echo.
 - **Reads the CatCard diagnostic log**, which never contains the PIN or seed.
-- **Warns about vulnerable Coldcard firmware.** A Coldcard running 4.x below 4.2.0 (or older), 5.x below 5.6.0, or
-  a Q1 below 1.5.0Q gets a full-width warning to upgrade now, with buttons for the official update or CatCard. Seeds
+- **Warns about vulnerable Coldcard firmware.** A Coldcard running 4.x below 4.2.0, 5.x below 5.6.0, or a Q1 below
+  1.5.0Q (the early 0.xQ builds included) gets a full-width warning to upgrade now, with buttons for the official update or CatCard. Seeds
   those versions generate on the device are weak, and the warning says so: a seed made there stays weak after the
   upgrade and should be replaced.
 - **Updates a Coldcard's own firmware.** With a Coldcard connected, the page offers every official release for its
