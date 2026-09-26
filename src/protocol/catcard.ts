@@ -8,6 +8,7 @@
  *   START:   2..4 u16 opcode (request) / status (reply), 4..8 u32 total length, 8..64 payload
  *   CONT:    2..64 payload
  */
+import { Initiator, type Session } from './ncry';
 import { Serial, type Transport } from './transport';
 
 export const CATCARD_VID = 0x39f2;
@@ -28,8 +29,11 @@ export const Opcode = {
   UpgradePacked: 0x0013,
   InjectKey: 0x0020,
   UnlockPin: 0x0021,
-  NcryStart: 0x0040,
   NcryMsg: 0x0041,
+  PairCommit: 0x0042,
+  PairReveal: 0x0043,
+  PairConfirm: 0x0044,
+  PairAbort: 0x0045,
 } as const;
 export type Opcode = (typeof Opcode)[keyof typeof Opcode];
 
@@ -72,13 +76,16 @@ export const caps = {
   DEBUG_MEM: 1 << 2,
   UNLOCK_PIN: 1 << 3,
   UPGRADE_PACKED: 1 << 4,
-  NCRY: 1 << 5,
+  /** Bit 5 was v1's unpaired channel: retired, never set by current firmware. */
+  HOST_WALLET: 1 << 6,
+  PAIRING: 1 << 7,
 } as const;
 
 export const CAP_NAMES: ReadonlyArray<{ bit: number; name: string; description: string; hazard?: boolean }> = [
   { bit: caps.UPGRADE, name: 'Upgrade', description: 'Can stage and install a firmware image over USB.' },
   { bit: caps.UPGRADE_PACKED, name: 'Packed upgrade', description: 'Accepts a deflated firmware image.' },
-  { bit: caps.NCRY, name: 'Encrypted channel', description: 'Accepts an X25519 / ChaCha20-Poly1305 session.' },
+  { bit: caps.PAIRING, name: 'Pairing', description: 'Pairs an encrypted channel by a code compared on both screens.' },
+  { bit: caps.HOST_WALLET, name: 'Addresses and signing', description: 'Shares addresses and signs transactions for a paired computer, if you approve on the device.' },
   { bit: caps.KEY_INJECTION, name: 'Key injection', description: 'Accepts keypresses over USB. Bench builds only.', hazard: true },
   { bit: caps.UNLOCK_PIN, name: 'PIN over USB', description: 'Accepts the login PIN over USB. Bench builds only.', hazard: true },
   { bit: caps.DEBUG_MEM, name: 'Memory monitor', description: 'Raw peek / poke / jsr. Must never ship.', hazard: true },
@@ -283,6 +290,41 @@ export class CatCardClient {
     return parseIdentify(await this.call(Opcode.Identify));
   }
 
+  /**
+   * Opens a pairing handshake: commit, then reveal. Returns the code both screens now
+   * show, and the steps that finish or abandon it. Nothing is paired until a person has
+   * compared the codes on both sides and both have said yes.
+   */
+  async startPairing(): Promise<PendingPairing> {
+    const host = new Initiator();
+    const c = await this.request(Opcode.PairCommit, host.commit);
+    if (c.status === Status.NotNow) throw new PairingError('Unlock the CatCard with its PIN first.');
+    if (c.status === Status.Busy) {
+      throw new PairingError('A pairing code is already on the CatCard, or one was shown a few seconds ago. Answer it or wait, then try again.');
+    }
+    if (c.status !== Status.Ok || c.body.length !== 32) throw new PairingError(`The CatCard refused to pair (${statusName(c.status)}).`);
+    const session = host.finish(c.body);
+    const r = await this.request(Opcode.PairReveal, host.public);
+    if (r.status !== Status.Ok) throw new PairingError(`The CatCard refused the pairing (${statusName(r.status)}).`);
+    return new PendingPairing(this, session);
+  }
+
+  /** One sealed command inside a session: the inner status and payload. */
+  async sealed(session: Session, opcode: number, payload: Uint8Array = new Uint8Array(0)): Promise<Reply> {
+    const plain = new Uint8Array(2 + payload.length);
+    new DataView(plain.buffer).setUint16(0, opcode, true);
+    plain.set(payload, 2);
+    const r = await this.request(Opcode.NcryMsg, session.seal(plain));
+    if (r.status !== Status.Ok) {
+      throw new PairingError(
+        r.status === Status.Declined ? 'Pairing was declined on the CatCard.' : `The encrypted session ended (${statusName(r.status)}). Pair again.`,
+      );
+    }
+    const inner = session.open(r.body);
+    if (inner.length < 2) throw new PairingError('The CatCard sent an empty sealed reply.');
+    return { status: new DataView(inner.buffer, inner.byteOffset).getUint16(0, true), body: inner.subarray(2) };
+  }
+
   /** Reads the whole boot/diagnostic log, one page per round trip. */
   async readLog(): Promise<DeviceLog> {
     const chunks: Uint8Array[] = [];
@@ -307,5 +349,47 @@ export class CatCardClient {
       at += c.length;
     }
     return { text: dec.decode(all), total, wrapped };
+  }
+}
+
+export class PairingError extends Error {
+  constructor(msg: string) {
+    super(msg);
+    this.name = 'PairingError';
+  }
+}
+
+/** A handshake whose code is on both screens, waiting for the two people to compare it. */
+export class PendingPairing {
+  constructor(
+    private readonly client: CatCardClient,
+    readonly session: Session,
+  ) {}
+
+  get code(): number {
+    return this.session.code;
+  }
+
+  /**
+   * The host's user said the codes match. Sends the sealed confirmation until the
+   * device's user has answered too, and resolves once the channel is paired.
+   */
+  async confirm(opts: { signal?: AbortSignal; pollMs?: number; waitMs?: number } = {}): Promise<Session> {
+    const deadline = Date.now() + (opts.waitMs ?? 130_000);
+    for (;;) {
+      const r = await this.client.sealed(this.session, Opcode.PairConfirm);
+      if (r.status === Status.Ok) return this.session;
+      if (r.status !== Status.NotNow) throw new PairingError(`The CatCard refused the pairing (${statusName(r.status)}).`);
+      if (opts.signal?.aborted || Date.now() > deadline) {
+        await this.abort();
+        throw new PairingError(opts.signal?.aborted ? 'Pairing was cancelled.' : 'Nobody answered on the CatCard in time.');
+      }
+      await new Promise((res) => setTimeout(res, opts.pollMs ?? 500));
+    }
+  }
+
+  /** The host's user said no, or gave up: takes the prompt off the device. */
+  async abort(): Promise<void> {
+    await this.client.request(Opcode.PairAbort).catch(() => undefined);
   }
 }

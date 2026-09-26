@@ -7,6 +7,7 @@ import DiagnosticsPanel from './components/DiagnosticsPanel.vue';
 import ColdcardUpdate from './components/ColdcardUpdate.vue';
 import UpgradeAlert from './components/UpgradeAlert.vue';
 import FirmwareSwitch from './components/FirmwareSwitch.vue';
+import HostWallet from './components/HostWallet.vue';
 import Unsupported from './components/Unsupported.vue';
 import { connect, disconnect, reconnectGranted, session } from './session';
 
@@ -71,6 +72,7 @@ onMounted(() => {
         <ColdcardUpdate />
         <FirmwareSwitch />
       </template>
+      <HostWallet v-if="session.phase === 'ready' && session.known?.kind === 'catcard'" />
       <DiagnosticsPanel v-if="session.phase === 'ready'" />
     </template>
   </main>

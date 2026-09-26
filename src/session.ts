@@ -5,7 +5,9 @@
  * and a management page acting on two wallets at once is a way to act on the wrong one.
  */
 import { reactive, readonly } from 'vue';
-import { CatCardClient, type DeviceLog, type Identify } from './protocol/catcard';
+import { CatCardClient, PairingError, type DeviceLog, type Identify, type PendingPairing } from './protocol/catcard';
+import type { AddressReply, Call } from './protocol/hostwallet';
+import type { Session as NcrySession } from './protocol/ncry';
 import { ColdcardClient, type ColdcardVersion } from './protocol/coldcard';
 import { classify, grantedDevices, isWebHidSupported, requestDevice, type KnownDevice } from './protocol/device';
 import { WebHidTransport } from './protocol/transport';
@@ -44,6 +46,10 @@ interface State {
   restarted: boolean;
   /** Which firmware that restart installs. */
   restartTarget: InstallTarget | null;
+  /** A CatCard channel paired for this connection; gone on unplug or reload. */
+  paired: boolean;
+  /** What the CatCard last shared on this paired session; signing needs it. */
+  addresses: AddressReply | null;
 }
 
 const state = reactive<State>({
@@ -62,11 +68,14 @@ const state = reactive<State>({
   installing: false,
   restarted: false,
   restartTarget: null,
+  paired: false,
+  addresses: null,
 });
 
 let device: HIDDevice | null = null;
 let transport: WebHidTransport | null = null;
 let client: CatCardClient | ColdcardClient | null = null;
+let paired: NcrySession | null = null;
 
 export const session = readonly(state);
 
@@ -92,6 +101,13 @@ function reset(): void {
   state.log = null;
   state.busy = false;
   state.installing = false;
+  dropPairing();
+}
+
+function dropPairing(): void {
+  paired = null;
+  state.paired = false;
+  state.addresses = null;
 }
 
 /** True when the browser exposes a report the page can send to on this device. */
@@ -229,6 +245,44 @@ export async function readLog(): Promise<void> {
     state.busy = false;
   }
 }
+
+/** Starts pairing with the connected CatCard; the caller shows the code and asks. */
+export async function startPairing(): Promise<PendingPairing> {
+  if (!(client instanceof CatCardClient)) throw new Error('No CatCard is connected.');
+  dropPairing();
+  return client.startPairing();
+}
+
+/** Both people accepted the code: from now on, host-wallet commands may run. */
+export function setPaired(session: NcrySession): void {
+  paired = session;
+  state.paired = true;
+  state.addresses = null;
+}
+
+export function unpair(): void {
+  dropPairing();
+}
+
+export function setAddresses(a: AddressReply | null): void {
+  state.addresses = a;
+}
+
+/**
+ * Runs one command inside the paired channel. A session that fails is over for good,
+ * so the page drops it and asks to pair again rather than retrying on it.
+ */
+export const hostCall: Call = async (opcode, payload) => {
+  const c = client;
+  const s = paired;
+  if (!(c instanceof CatCardClient) || !s) throw new PairingError('Pair with the CatCard first.');
+  try {
+    return await c.sealed(s, opcode, payload);
+  } catch (err) {
+    if (paired === s) dropPairing();
+    throw err;
+  }
+};
 
 /** The connected Coldcard's client, for the firmware switch. */
 export function coldcardClient(): ColdcardClient | null {

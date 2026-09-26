@@ -17,6 +17,12 @@ entirely in your browser and talks to the device with WebHID. No server is invol
   firmware version, build date, bootloader, hardware and network.
 - **Checks the connection.** Ping sends random bytes and checks the echo.
 - **Reads the CatCard diagnostic log**, which never contains the PIN or seed.
+- **Pairs with a CatCard, shares addresses, and signs.** The page pairs an encrypted channel with the CatCard
+  (ncry v2): both screens show the same six-digit code, and the person checks that they match. Once paired, the
+  page can ask for the wallet's addresses and extended keys, and send a transaction to sign: a Bitcoin PSBT, an
+  Ethereum transaction or a Solana transaction. Every request is approved on the CatCard, and only accounts shared
+  in the same session can sign. For a PSBT the page finds this wallet's keys from its derivation records, so nobody
+  types paths. Pairing ends when the CatCard is unplugged or the page reloads.
 - **Warns about vulnerable Coldcard firmware.** A Coldcard running 4.x below 4.2.0, 5.x below 5.6.0, or a Q1 below
   1.5.0Q (the early 0.xQ builds included) gets a full-width warning to upgrade now, with buttons for the official update or CatCard. Seeds
   those versions generate on the device are weak, and the warning says so: a seed made there stays weak after the

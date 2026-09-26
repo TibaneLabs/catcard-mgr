@@ -74,12 +74,12 @@ describe('CatCard framing', () => {
 
 describe('CatCard Identify', () => {
   it('reads the strings after the capability byte', () => {
-    const id = parseIdentify(identifyBody('mk4', '7.0.0', 0b01, caps.UPGRADE | caps.NCRY));
+    const id = parseIdentify(identifyBody('mk4', '7.0.0', 0b01, caps.UPGRADE | caps.PAIRING));
     expect(id).toEqual({
       protocol: 1,
       unlocked: true,
       blank: false,
-      caps: caps.UPGRADE | caps.NCRY,
+      caps: caps.UPGRADE | caps.PAIRING,
       board: 'mk4',
       version: '7.0.0',
     });
