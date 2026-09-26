@@ -19,8 +19,8 @@ entirely in your browser and talks to the device with WebHID. No server is invol
 - **Reads the CatCard diagnostic log**, which never contains the PIN or seed.
 - **Switches a Coldcard to CatCard.** With a Coldcard connected, the page offers to install CatCard. You pick a
   release, Bitcoin only or all chains, and with or without the games. The page picks the image for the Coldcard's
-  model, then checks it before sending anything. The file must match the release's `SHA256SUMS`, and the firmware
-  header must be present, declare the right length and name this model. The image then goes through stock
+  model, then checks it before sending anything. The file must match the SHA-256 that GitHub lists for it, and the
+  firmware header must be present, declare the right length and name this model. The image then goes through stock
   firmware's own uploader, and the Coldcard's digest of what it received is compared with the page's before the
   device is asked to restart and install.
 - **Reconnects on its own** to a device the site was already allowed to use, when it is plugged back in.
@@ -45,18 +45,15 @@ SUBSYSTEM=="hidraw", ATTRS{idVendor}=="d13e", ATTRS{idProduct}=="cc10", TAG+="ua
 | CatCard | `39f2:0401` | `catcard-usb` framing: 64-byte START/CONT frames with a sequence byte, u16 opcode/status |
 | Coldcard | `d13e:cc10` | Stock framing: a length/last/encrypted header byte and 63 bytes of a 4-character command |
 
-Only the unencrypted Coldcard commands are implemented so far. Chromium hides HID interfaces that it treats as
-FIDO security keys; if a Coldcard's interface falls in that class, the page reports that the browser gave it no
-writable report instead of hanging.
+Only the unencrypted Coldcard commands are implemented so far.
 
-## Firmware mirror
+## Where firmware comes from
 
-GitHub serves release files from a host that sends no CORS headers, so a web page cannot download them. The Pages
-build therefore copies the newest CatCard releases into the site with `scripts/fetch-firmware.mjs`, checking every
-image against its release's `SHA256SUMS`, and writes `firmware/index.json` to describe them.
-
-The workflow checks for new releases every hour and rebuilds only when they changed. A CatCard release workflow
-can trigger a rebuild at once by sending a `repository_dispatch` event of type `catcard-release` to this repository.
+The page reads the release list and each file's SHA-256 live from GitHub's releases API, so a new CatCard release
+is offered as soon as it is published. GitHub serves the files themselves from a host that sends no CORS headers,
+which stops a web page from reading them, so the page downloads them through
+[gh-release.tibane.net](https://gh-release.tibane.net/), a caching proxy that adds those headers. The proxy is not
+trusted: a file that does not match GitHub's digest is refused.
 
 ## Clean-room note
 
@@ -70,15 +67,13 @@ contributors should not read that file.
 npm install
 npm run dev       # http://localhost:5173
 npm run check     # type check and unit tests
-npm run firmware  # mirror release images into public/firmware/ (set GITHUB_TOKEN to avoid rate limits)
 npm run build     # static site in dist/
 ```
 
 The protocol code in `src/protocol/` is plain TypeScript over byte arrays, independent of Vue, and is tested against
 a fake transport in `test/`. `src/session.ts` holds the one connected device as reactive state for the UI.
 
-Every push to `master` is checked, built with the firmware mirror, and published to GitHub Pages by
-`.github/workflows/pages.yml`.
+Every push to `master` is checked, built and published to GitHub Pages by `.github/workflows/pages.yml`.
 
 ## License
 

@@ -4,12 +4,12 @@ import {
   BOARD_LABELS,
   boardFor,
   downloadImage,
-  loadManifest,
+  loadReleases,
   pickImage,
   sha256,
   type Board,
   type FirmwareImage,
-  type FirmwareManifest,
+  type FirmwareRelease,
 } from '../firmware/catalog';
 import { parseDfu } from '../firmware/dfu';
 import { checkImage, compatibleHardware, parseHeader, type FirmwareHeader } from '../firmware/header';
@@ -18,10 +18,9 @@ import { runInstall, session } from '../session';
 
 type Step = 'offer' | 'choose' | 'checking' | 'checked' | 'installing' | 'sent';
 
-const base = import.meta.env.BASE_URL;
 const step = ref<Step>('offer');
 const error = ref<string | null>(null);
-const manifest = ref<FirmwareManifest | null>(null);
+const releases = ref<FirmwareRelease[] | null>(null);
 const releaseTag = ref('');
 const chosenBoard = ref<Board | null>(null);
 const bitcoinOnly = ref(true);
@@ -34,7 +33,7 @@ const progress = ref<InstallProgress | null>(null);
 const hardware = computed(() => (session.info?.kind === 'coldcard' ? session.info.version.hardware : null));
 const detectedBoard = computed(() => boardFor(hardware.value));
 const board = computed<Board | null>(() => detectedBoard.value ?? chosenBoard.value);
-const release = computed(() => manifest.value?.releases.find((r) => r.tag === releaseTag.value) ?? null);
+const release = computed(() => releases.value?.find((r) => r.tag === releaseTag.value) ?? null);
 const image = computed(() => (release.value && board.value ? pickImage(release.value, board.value, bitcoinOnly.value, games.value) : null));
 
 const kb = (n: number) => `${Math.round(n / 1024).toLocaleString()} KB`;
@@ -42,10 +41,10 @@ const kb = (n: number) => `${Math.round(n / 1024).toLocaleString()} KB`;
 async function open(): Promise<void> {
   error.value = null;
   step.value = 'choose';
-  if (manifest.value) return;
+  if (releases.value) return;
   try {
-    manifest.value = await loadManifest(base);
-    releaseTag.value = manifest.value.releases[0]?.tag ?? '';
+    releases.value = await loadReleases();
+    releaseTag.value = releases.value[0]?.tag ?? '';
     if (!releaseTag.value) error.value = 'No CatCard release is available yet.';
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err);
@@ -66,7 +65,7 @@ async function check(): Promise<void> {
   step.value = 'checking';
   download.value = { got: 0, total: file.size };
   try {
-    const bytes = await downloadImage(base, file, (got, total) => (download.value = { got, total }));
+    const bytes = await downloadImage(file, (got, total) => (download.value = { got, total }));
     const { image: img } = parseDfu(bytes);
     const header = parseHeader(img);
     const problems = checkImage(img, header, hardware.value);
@@ -131,11 +130,11 @@ const percent = computed(() => (progress.value ? Math.round((progress.value.sent
         <li>To go back, install stock firmware from CatCard's upgrade screen, over USB or from a microSD card.</li>
       </ul>
 
-      <fieldset v-if="manifest && step !== 'sent'" class="choices" :disabled="step === 'checking' || step === 'installing'">
-        <div v-if="manifest.releases.length > 1" class="field">
+      <fieldset v-if="releases && step !== 'sent'" class="choices" :disabled="step === 'checking' || step === 'installing'">
+        <div v-if="releases.length > 1" class="field">
           <label for="rel">Version</label>
           <select id="rel" v-model="releaseTag">
-            <option v-for="r in manifest.releases" :key="r.tag" :value="r.tag">
+            <option v-for="r in releases" :key="r.tag" :value="r.tag">
               {{ r.name }}{{ r.prerelease ? ' (pre-release)' : '' }}
             </option>
           </select>
@@ -219,7 +218,7 @@ const percent = computed(() => (progress.value ? Math.round((progress.value.sent
           </div>
           <div>
             <dt>Checksum</dt>
-            <dd>matches the release</dd>
+            <dd>matches GitHub's</dd>
           </div>
         </dl>
         <ul v-if="checked.problems.length" class="problems">

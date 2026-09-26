@@ -3,5 +3,5 @@
   "compilerOptions": {
     "types": ["vite/client", "w3c-web-hid", "node"]
   },
-  "include": ["src", "test", "scripts/*.d.mts"]
+  "include": ["src", "test"]
 }

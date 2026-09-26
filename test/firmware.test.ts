@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { parseAssetName, parseSums } from '../scripts/firmware-catalog.mjs';
-import { boardFor, pickImage, type FirmwareRelease } from '../src/firmware/catalog';
+import { boardFor, parseAssetName, pickImage, releasesFromGithub, type FirmwareRelease, type GithubRelease } from '../src/firmware/catalog';
 import { DfuError, parseDfu } from '../src/firmware/dfu';
 import { checkImage, compatibleHardware, HEADER_OFFSET, HW, MAGIC, parseHeader } from '../src/firmware/header';
 
@@ -55,16 +54,47 @@ describe('release asset names', () => {
     expect(parseAssetName('catcard-mk9-7.0.0.dfu')).toBeNull();
   });
 
-  it('reads sha256sum output', () => {
-    const h = 'a'.repeat(64);
-    expect(parseSums(`${h}  one.dfu\n${h} *two.dfu\n\n`)).toEqual(new Map([['one.dfu', h], ['two.dfu', h]]));
+});
+
+describe('releases from the GitHub API', () => {
+  const h = 'ab'.repeat(32);
+  const release = (over: Partial<GithubRelease> = {}): GithubRelease => ({
+    tag_name: 'v7.0.0-alpha1',
+    name: 'CatCard v7.0.0-alpha1',
+    draft: false,
+    prerelease: true,
+    published_at: '2026-09-26T13:15:35Z',
+    html_url: 'https://github.com/TibaneLabs/catcard/releases/tag/v7.0.0-alpha1',
+    assets: [
+      { name: 'catcard-q1-games-7.0.0-alpha1.dfu', size: 10, digest: `sha256:${h}`, state: 'uploaded' },
+      { name: 'catcard-mk3-7.0.0-alpha1.dfu', size: 20, digest: `sha256:${h}`, state: 'uploaded' },
+      { name: 'SHA256SUMS', size: 5, digest: `sha256:${h}`, state: 'uploaded' },
+    ],
+    ...over,
+  });
+
+  it('offers the images with GitHub digests and proxy URLs', () => {
+    const [r] = releasesFromGithub([release()]);
+    expect(r?.images.map((i) => i.file)).toEqual(['catcard-mk3-7.0.0-alpha1.dfu', 'catcard-q1-games-7.0.0-alpha1.dfu']);
+    expect(r?.images[0]).toMatchObject({
+      url: 'https://gh-release.tibane.net/TibaneLabs/catcard/v7.0.0-alpha1/catcard-mk3-7.0.0-alpha1.dfu',
+      sha256: h,
+      board: 'mk3',
+      size: 20,
+    });
+  });
+
+  it('leaves out drafts, files without a digest, and releases with nothing usable', () => {
+    const noDigest = release({ tag_name: 'v1', assets: [{ name: 'catcard-mk3-1.dfu', size: 1, digest: null }] });
+    const pending = release({ tag_name: 'v2', assets: [{ name: 'catcard-mk3-2.dfu', size: 1, digest: `sha256:${h}`, state: 'starter' }] });
+    expect(releasesFromGithub([release({ draft: true }), noDigest, pending])).toEqual([]);
   });
 });
 
 describe('picking an image', () => {
   const images = ['mk3', 'mk4-mk5', 'q1'].flatMap((board) =>
     [false, true].flatMap((bitcoinOnly) =>
-      [false, true].map((games) => ({ file: `${board}-${bitcoinOnly}-${games}`, path: '', size: 1, sha256: '', board, bitcoinOnly, games, version: '7' })),
+      [false, true].map((games) => ({ file: `${board}-${bitcoinOnly}-${games}`, url: '', size: 1, sha256: '', board, bitcoinOnly, games, version: '7' })),
     ),
   ) as FirmwareRelease['images'];
   const rel: FirmwareRelease = { tag: 'v7', name: 'v7', prerelease: true, published: '', url: '', images };
