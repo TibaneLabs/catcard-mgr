@@ -1,0 +1,120 @@
+:root {
+  --paper: #e4e9ee;
+  --surface: #f5f7f9;
+  --ink: #1a2330;
+  --muted: #56647a;
+  --line: #c3ccd6;
+  --cat: #e0681a;
+  --cat-text: #a94b0c;
+  --ok: #217a52;
+  --hazard: #b3261e;
+  --screen: #0f1a14;
+  --screen-ink: #9ef0b8;
+  --body-font: 'Atkinson Hyperlegible Next', system-ui, sans-serif;
+  --display-font: 'Bricolage Grotesque Variable', 'Atkinson Hyperlegible Next', system-ui, sans-serif;
+  --mono-font: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, monospace;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #121921;
+    --surface: #19222d;
+    --ink: #e3e8ee;
+    --muted: #93a2b4;
+    --line: #2d3947;
+    --cat: #ff8a2e;
+    --cat-text: #ffa35c;
+    --ok: #4cc28a;
+    --hazard: #ff7a6b;
+    color-scheme: dark;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--body-font);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--display-font);
+  line-height: 1.15;
+  margin: 0;
+}
+
+p {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border-radius: 999px;
+  border: 1.5px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  padding: 0.5rem 1.1rem;
+  font-weight: 700;
+}
+
+button.primary {
+  background: var(--cat);
+  border-color: var(--cat);
+  color: #1a1206;
+}
+
+button:hover:not(:disabled) {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 3px solid var(--cat);
+  outline-offset: 2px;
+}
+
+code,
+.mono {
+  font-family: var(--mono-font);
+  font-size: 0.92em;
+}
+
+a {
+  color: var(--cat-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

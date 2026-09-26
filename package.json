@@ -1,0 +1,39 @@
+{
+  "name": "catcard-mgr",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Management web UI for CatCard and Coldcard hardware wallets over WebHID",
+  "homepage": "https://github.com/TibaneLabs/catcard-mgr#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TibaneLabs/catcard-mgr.git"
+  },
+  "license": "MIT",
+  "author": "Mark Karpeles",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test"
+  },
+  "dependencies": {
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource/atkinson-hyperlegible-next": "^5.3.0",
+    "vue": "^3.5.43"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.0",
+    "@types/w3c-web-hid": "^1.0.7",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2",
+    "vue-tsc": "^3.3.11"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
