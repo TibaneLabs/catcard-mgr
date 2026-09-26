@@ -300,7 +300,15 @@ export class CatCardClient {
     const c = await this.request(Opcode.PairCommit, host.commit);
     if (c.status === Status.NotNow) throw new PairingError('Unlock the CatCard with its PIN first.');
     if (c.status === Status.Busy) {
-      throw new PairingError('A pairing code is already on the CatCard, or one was shown a few seconds ago. Answer it or wait, then try again.');
+      throw new PairingError('A pairing code is on the CatCard, or a pairing was started a few seconds ago. Answer it or wait, then try again.');
+    }
+    if (c.status === Status.Refused) {
+      // After several abandoned attempts the device blocks pairing until the person
+      // dismisses its warning. Its reason says so.
+      const reason = dec.decode(c.body).trim() || 'pairing is blocked';
+      throw new PairingError(
+        `The CatCard refused to pair: ${reason}. Several pairing attempts were started and dropped, which is what a relay in the middle would do. Dismiss the warning on the CatCard, check what the cable passes through, then try again.`,
+      );
     }
     if (c.status !== Status.Ok || c.body.length !== 32) throw new PairingError(`The CatCard refused to pair (${statusName(c.status)}).`);
     const session = host.finish(c.body);

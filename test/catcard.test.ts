@@ -139,3 +139,18 @@ describe('CatCardClient', () => {
     expect(log.wrapped).toBe(false);
   });
 });
+
+describe('pairing refusals', () => {
+  it('passes on the reason when the device has blocked pairing', async () => {
+    const t = new FakeTransport((report) => {
+      const op = new DataView(report.buffer).getUint16(2, true);
+      return op === Opcode.PairCommit ? encodeFrames(Status.Refused, new TextEncoder().encode('pairing blocked: acknowledge it on the device')) : [];
+    });
+    await expect(new CatCardClient(t).startPairing()).rejects.toThrow(/pairing blocked: acknowledge it on the device/);
+  });
+
+  it('says to wait when a pairing was started moments ago', async () => {
+    const t = new FakeTransport(() => encodeFrames(Status.Busy, new Uint8Array()));
+    await expect(new CatCardClient(t).startPairing()).rejects.toThrow(/wait/);
+  });
+});
