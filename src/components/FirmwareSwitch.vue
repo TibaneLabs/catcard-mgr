@@ -140,8 +140,8 @@ const percent = computed(() => (progress.value ? Math.round((progress.value.sent
             </option>
           </select>
         </div>
-        <p v-else-if="release" class="field">
-          Version: <strong>{{ release.name }}</strong><span v-if="release.prerelease">, a pre-release</span>.
+        <p v-else-if="release">
+          Version: <strong>{{ release.name }}</strong>{{ release.prerelease ? ', a pre-release.' : '.' }}
           <a :href="release.url" target="_blank" rel="noopener">Release notes</a>
         </p>
 
