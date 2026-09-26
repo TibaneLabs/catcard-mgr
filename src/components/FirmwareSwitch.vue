@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
+import { panelRequest } from '../panels';
 import { BOARD_LABELS, boardFor, downloadImage, loadReleases, pickImage, type Board, type FirmwareRelease } from '../firmware/catalog';
 import { session } from '../session';
 import InstallSteps from './InstallSteps.vue';
@@ -36,10 +37,18 @@ async function start(): Promise<void> {
     error.value = err instanceof Error ? err.message : String(err);
   }
 }
+
+const root = ref<HTMLElement | null>(null);
+watch(panelRequest, async (r) => {
+  if (r?.name !== 'catcard-switch') return;
+  await start();
+  await nextTick();
+  root.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 </script>
 
 <template>
-  <section class="switch" aria-labelledby="switch-title">
+  <section ref="root" class="switch" aria-labelledby="switch-title">
     <h2 id="switch-title">Switch this Coldcard to CatCard</h2>
     <p class="intro">
       CatCard is open-source firmware for Coldcard hardware. Installing it replaces the Coldcard firmware on this device.

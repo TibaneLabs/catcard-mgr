@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { urgentUpgrade } from '../firmware/advisory';
 import { hexId } from '../protocol/device';
 import { session } from '../session';
 
@@ -16,7 +17,7 @@ const lines = computed<string[]>(() => {
     return [`catcard ${id.board}`, id.version, st];
   }
   const v = s.info.version;
-  return [`coldcard ${v.hardware ?? ''}`.trim(), v.version, v.edge ? 'edge build' : ''];
+  return [`coldcard ${v.hardware ?? ''}`.trim(), v.version, urgentUpgrade(v.version) ? 'UPGRADE NOW' : v.edge ? 'edge build' : ''];
 });
 
 const plugged = computed(() => session.phase === 'ready' || session.phase === 'connecting');

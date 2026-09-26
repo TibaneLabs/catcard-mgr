@@ -5,6 +5,7 @@ import DeviceFigure from './components/DeviceFigure.vue';
 import IdentityPanel from './components/IdentityPanel.vue';
 import DiagnosticsPanel from './components/DiagnosticsPanel.vue';
 import ColdcardUpdate from './components/ColdcardUpdate.vue';
+import UpgradeAlert from './components/UpgradeAlert.vue';
 import FirmwareSwitch from './components/FirmwareSwitch.vue';
 import Unsupported from './components/Unsupported.vue';
 import { connect, disconnect, reconnectGranted, session } from './session';
@@ -22,6 +23,8 @@ onMounted(() => {
     </div>
     <button v-if="session.phase === 'ready'" type="button" @click="disconnect">Disconnect</button>
   </header>
+
+  <UpgradeAlert v-if="session.phase === 'ready'" />
 
   <main>
     <Unsupported v-if="!session.supported" />

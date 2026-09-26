@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
+import { panelRequest } from '../panels';
 import { COINKITE_FINGERPRINT, COINKITE_SIGNER } from '../firmware/coinkite-key';
 import {
   boardsFor,
@@ -76,10 +77,18 @@ async function start(): Promise<void> {
     error.value = err instanceof Error ? err.message : String(err);
   }
 }
+
+const root = ref<HTMLElement | null>(null);
+watch(panelRequest, async (r) => {
+  if (r?.name !== 'coldcard-update') return;
+  await start();
+  await nextTick();
+  root.value?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 </script>
 
 <template>
-  <section class="update" aria-labelledby="update-title">
+  <section ref="root" class="update" aria-labelledby="update-title">
     <h2 id="update-title">Update the Coldcard firmware</h2>
     <p class="intro">Install an official Coldcard release, checked against the list of files Coinkite signs.</p>
 
